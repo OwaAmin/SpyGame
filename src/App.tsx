@@ -392,27 +392,78 @@ export default function App() {
     </div>
   );
 
+  // LocalStorage Helpers
+  const getLocalData = (key: string, defaultValue: any) => {
+    const data = localStorage.getItem(key);
+    return data ? JSON.parse(data) : defaultValue;
+  };
+
+  const setLocalData = (key: string, data: any) => {
+    localStorage.setItem(key, JSON.stringify(data));
+  };
+
+  const fetchScores = () => {
+    const data = getLocalData('spygame_scores', []);
+    setScores(data.sort((a: any, b: any) => b.score - a.score));
+  };
+
+  const fetchHistory = () => {
+    const data = getLocalData('spygame_history', []);
+    setHistory(data.sort((a: any, b: any) => b.id - a.id));
+  };
+
+  const fetchPlayerAchievements = (name: string) => {
+    const allAchievements = getLocalData('spygame_achievements', []);
+    const playerAch = allAchievements
+      .filter((a: any) => a.player_name === name)
+      .map((a: any) => a.achievement_id);
+    setPlayerAchievements(playerAch);
+  };
+
+  const updateScore = (playerName: string, increment: number) => {
+    const currentScores = getLocalData('spygame_scores', []);
+    const existingIdx = currentScores.findIndex((s: any) => s.player_name === playerName);
+    
+    if (existingIdx !== -1) {
+      currentScores[existingIdx].score += increment;
+    } else {
+      currentScores.push({ player_name: playerName, score: increment });
+    }
+    
+    setLocalData('spygame_scores', currentScores);
+  };
+
+  const addAchievement = (playerName: string, achievementId: string) => {
+    const allAchievements = getLocalData('spygame_achievements', []);
+    const exists = allAchievements.some((a: any) => a.player_name === playerName && a.achievement_id === achievementId);
+    
+    if (!exists) {
+      allAchievements.push({
+        player_name: playerName,
+        achievement_id: achievementId,
+        date: new Date().toLocaleString('fa-IR')
+      });
+      setLocalData('spygame_achievements', allAchievements);
+    }
+  };
+
+  const addToHistory = (item: any) => {
+    const currentHistory = getLocalData('spygame_history', []);
+    const newItem = {
+      ...item,
+      id: Date.now(),
+      players: JSON.stringify(item.players),
+      special_roles: JSON.stringify(item.special_roles)
+    };
+    currentHistory.push(newItem);
+    setLocalData('spygame_history', currentHistory);
+  };
+
   // Fetch initial data
   useEffect(() => {
     fetchScores();
     fetchHistory();
   }, []);
-
-  const fetchScores = async () => {
-    try {
-      const res = await fetch('/api/scores');
-      const data = await res.json();
-      setScores(data);
-    } catch (e) { console.error(e); }
-  };
-
-  const fetchHistory = async () => {
-    try {
-      const res = await fetch('/api/history');
-      const data = await res.json();
-      setHistory(data);
-    } catch (e) { console.error(e); }
-  };
 
   const handleAction = (type: 'click' | 'reveal' | 'win' | 'spy' | 'error') => {
     if (soundEnabled) playSound(type);
@@ -605,11 +656,7 @@ export default function App() {
     
     const winners = players.filter(p => (winner === 'CITIZENS' ? (p.role !== 'SPY') : p.role === 'SPY'));
     for (const p of winners) {
-      await fetch('/api/scores/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ player_name: p.name, increment: 1 })
-      });
+      updateScore(p.name, 1);
 
       // Check for achievements
       const achievementsToGrant = ['FIRST_WIN'];
@@ -627,27 +674,19 @@ export default function App() {
       }
 
       for (const achId of achievementsToGrant) {
-        await fetch('/api/achievements/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ player_name: p.name, achievement_id: achId })
-        });
+        addAchievement(p.name, achId);
       }
     }
 
     // Add to history
-    await fetch('/api/history/add', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        date: new Date().toLocaleString('fa-IR'),
-        players: players,
-        spy_count: spyCount,
-        winner: winner === 'CITIZENS' ? 'شهروندان' : 'جاسوس‌ها',
-        difficulty: difficulty === 'EASY' ? 'آسان' : 'سخت',
-        word: currentWord,
-        special_roles: (detectiveEnabled || insiderEnabled) ? 'فعال' : 'غیرفعال'
-      })
+    addToHistory({
+      date: new Date().toLocaleString('fa-IR'),
+      players: players,
+      spy_count: spyCount,
+      winner: winner === 'CITIZENS' ? 'شهروندان' : 'جاسوس‌ها',
+      difficulty: difficulty === 'EASY' ? 'آسان' : 'سخت',
+      word: currentWord,
+      special_roles: (detectiveEnabled || insiderEnabled) ? 'فعال' : 'غیرفعال'
     });
 
     fetchScores();
@@ -655,15 +694,15 @@ export default function App() {
     setGameState('END');
   };
 
-  const resetScores = async () => {
+  const resetScores = () => {
     handleAction('click');
-    await fetch('/api/scores/reset', { method: 'POST' });
+    setLocalData('spygame_scores', []);
     fetchScores();
   };
 
-  const resetHistory = async () => {
+  const resetHistory = () => {
     handleAction('click');
-    await fetch('/api/history/reset', { method: 'POST' });
+    setLocalData('spygame_history', []);
     fetchHistory();
   };
 
@@ -718,14 +757,6 @@ export default function App() {
 
   const [selectedPlayerForAch, setSelectedPlayerForAch] = useState<string | null>(null);
   const [playerAchievements, setPlayerAchievements] = useState<string[]>([]);
-
-  const fetchPlayerAchievements = async (name: string) => {
-    try {
-      const res = await fetch(`/api/achievements/${encodeURIComponent(name)}`);
-      const data = await res.json();
-      setPlayerAchievements(data.map((a: any) => a.achievement_id));
-    } catch (e) { console.error(e); }
-  };
 
   const renderAchievements = () => (
     <div className="flex flex-col min-h-screen p-6 space-y-6">
@@ -1224,27 +1255,19 @@ export default function App() {
         }
         
         if (increment > 0) {
-          await fetch('/api/scores/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ player_name: p.name, increment })
-          });
+          updateScore(p.name, increment);
         }
       }
 
       // Add to history
-      await fetch('/api/history/add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          date,
-          players,
-          spy_count: spyCount,
-          winner,
-          difficulty: selectedCategory,
-          word: currentWord,
-          special_roles: { detective: detectiveEnabled, insider: insiderEnabled }
-        })
+      addToHistory({
+        date,
+        players,
+        spy_count: spyCount,
+        winner,
+        difficulty: selectedCategory,
+        word: currentWord,
+        special_roles: { detective: detectiveEnabled, insider: insiderEnabled }
       });
 
       fetchHistory();
